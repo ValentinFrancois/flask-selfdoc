@@ -6,24 +6,23 @@ import sys
 import inspect
 
 from flask import current_app, render_template, render_template_string, jsonify
-
-try:
-    # Flask < 2.0 -> Jinja2 < 3.0
-    from jinja2 import Markup
-except ImportError:
-    # Flask >= 2.0 -> Jinja2 >= 3.0
-    from jinja2.utils import markupsafe
-    Markup = markupsafe.Markup
-
-try:
-    # Flask < 2.0 -> Jinja2 < 3.0
-    from jinja2 import evalcontextfilter as pass_eval_context
-except ImportError:
-    # Flask >= 2.0 -> Jinja2 >= 3.0
-    from jinja2 import pass_eval_context
-
 from jinja2.exceptions import TemplateAssertionError
 
+try:
+    # Jinja2 < 3.1 (Flask <= 2.0 and python 3.6)
+    # https://jinja.palletsprojects.com/en/3.0.x/api/#jinja2.evalcontextfilter
+    from jinja2 import evalcontextfilter as pass_eval_context
+except ImportError:
+    # Jinja2 < 3.1 (Flask >= 2.0 and python <= 3.7)
+    from jinja2 import pass_eval_context
+
+try:
+    # Jinja2 < 3.1 (Flask <= 2.0 and python 3.6)
+    from jinja2 import Markup
+except ImportError:
+    # Jinja2 < 3.1 (Flask >= 2.0 and python <= 3.7)
+    from jinja2.utils import markupsafe
+    Markup = markupsafe.Markup
 
 try:
     from flask import _app_ctx_stack as stack
