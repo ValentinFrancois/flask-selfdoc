@@ -7,9 +7,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.6, 3.7, 3.8, 3.9]
+        python-version: [3.6, 3.7, 3.8, 3.9, 3.10]
         os: [ubuntu-18.04, macos-latest, windows-latest]
-        flask-version: ["1.0", 1.1, "2.0", latest]
+        flask-version: [1.0, 1.1, 2.0, 2.1, latest]
+        exclude:
+          # starting from Flask 2.1.0, python 3.6 is no longer supported:
+          - flask-version: 2.1.0
+            python-version: 3.6
+          - flask-version: latest
+            python-version: 3.6
+          # old versions of Flask no longer working with python 3.10:
+          - flask-version: 1.0
+            python-version: 3.10
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
@@ -18,10 +27,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install poetry
         run: pip install poetry
-      - name: Force the chosen flask version
-        run: poetry add flask==${{ matrix.flask-version }}
       - name: Install requirements
         run: poetry install
+      - name: Force the chosen flask version
+        run: poetry add flask==${{ matrix.flask-version }}
+      - name: list installed package versions for manual inspection
+        run: poetry self show
       - name: Run unit tests
         run: poetry run test
       - name: Run doctests
