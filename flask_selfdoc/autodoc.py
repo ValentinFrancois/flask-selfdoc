@@ -6,7 +6,11 @@ import sys
 import inspect
 
 from flask import current_app, render_template, render_template_string, jsonify
-from jinja2 import evalcontextfilter, Markup
+from jinja2 import Markup
+try:
+    from jinja2 import evalcontextfilter as pass_eval_context
+except ImportError:
+    from jinja2 import pass_eval_context
 from jinja2.exceptions import TemplateAssertionError
 
 
@@ -57,7 +61,7 @@ class Autodoc(object):
         _paragraph_re = re.compile(r'(?:\r\n|\r|\n){3,}')
 
         @app.template_filter()
-        @evalcontextfilter
+        @pass_eval_context
         def nl2br(eval_ctx, value):
             result = '\n\n'.join('%s' % p.replace('\n', Markup('<br>\n'))
                                  for p in _paragraph_re.split(value))
