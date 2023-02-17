@@ -6,11 +6,22 @@ import sys
 import inspect
 
 from flask import current_app, render_template, render_template_string, jsonify
-from jinja2 import Markup
+
 try:
+    # Flask < 2.0 -> Jinja2 < 3.0
+    from jinja2 import Markup
+except ImportError:
+    # Flask >= 2.0 -> Jinja2 >= 3.0
+    from jinja2.utils import markupsafe
+    Markup = markupsafe.Markup
+
+try:
+    # Flask < 2.0 -> Jinja2 < 3.0
     from jinja2 import evalcontextfilter as pass_eval_context
 except ImportError:
+    # Flask >= 2.0 -> Jinja2 >= 3.0
     from jinja2 import pass_eval_context
+
 from jinja2.exceptions import TemplateAssertionError
 
 
