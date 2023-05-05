@@ -1,25 +1,126 @@
+import json
 from operator import attrgetter, itemgetter
 import os
 import re
 from collections import defaultdict
 import sys
 import inspect
+from typing import Optional, Tuple
 
 from flask import current_app, render_template, render_template_string, jsonify
-from jinja2 import evalcontextfilter, Markup
 from jinja2.exceptions import TemplateAssertionError
 
+try:
+    # Jinja2 < 3.1 (Flask <= 2.0 and python 3.6)
+    # https://jinja.palletsprojects.com/en/3.0.x/api/#jinja2.evalcontextfilter
+    from jinja2 import evalcontextfilter as pass_eval_context
+except ImportError:
+    # Jinja2 < 3.1 (Flask >= 2.0 and python <= 3.7)
+    from jinja2 import pass_eval_context
 
 try:
-    from flask import _app_ctx_stack as stack
+    # Jinja2 < 3.1 (Flask <= 2.0 and python 3.6)
+    from jinja2 import Markup
 except ImportError:
-    from flask import _request_ctx_stack as stack
+    # Jinja2 < 3.1 (Flask >= 2.0 and python <= 3.7)
+    from jinja2.utils import markupsafe
+    Markup = markupsafe.Markup
+
+try:
+    from flask.globals import _cv_app
+except ImportError:
+    _cv_app = None
+    try:
+        from flask import _app_ctx_stack as stack
+    except ImportError:
+        from flask import _request_ctx_stack as stack
 
 
 if sys.version < '3':
     get_function_code = attrgetter('func_code')
 else:
     get_function_code = attrgetter('__code__')
+
+
+def custom_jsonify(*args,
+                   indent: Optional[int] = None,
+                   separators: Optional[Tuple] = (',', ':'),
+                   **kwargs):
+    response = jsonify(*args, **kwargs)
+    json_data = json.loads(response.data.decode('utf-8'))
+    json_string = json.dumps(json_data,
+                             indent=indent,
+                             separators=separators)
+    response.data = json_string.encode('utf-8')
+    return response
+
+
+def get_decorator_frame_info(frame) -> dict:
+    """
+    The way that the line number of a decorator is detected changed across
+    python versions:
+    - python <= 3.8:
+      stack()[1].lineno points to the line above the decorated function
+      => points to the closest decorator, not necessarily the one that did the
+         call to stack()
+    - python 3.9 and 3.10:
+      stack()[1].lineno points to the line of the decorated function
+    - python 3.11:
+      stack()[1].lineno points to the exact line of the decorator that did the
+      call to stack()
+
+    Example:
+
+    1   |def call_stack_and_get_lineno():
+    2   |
+    3   |    def decorator(func):
+    4   |        calling_frame = stack()[1]
+    5   |        print(calling_frame.lineno)
+    6   |        return func
+    7   |
+    8   |    return decorator
+    9   |
+    10  |
+    11  |@decorator1
+    12  |@call_stack_and_get_lineno
+    13  |@decorator2
+    14  |def func():
+    15  |    pass
+
+    - python <= 3.8: will print line 13
+    - python 3.9 and 3.10: will print line 14 (desired behaviour)
+    - python 3.11: will print line 12
+
+    We adjust the found line number with some offset (by reading the python
+    source file) if required.
+    """
+    line_number = frame.lineno
+    try:
+        with open(frame.filename, 'r') as python_file:
+            python_lines = python_file.readlines()
+        # current line + next ones
+        context_lines = python_lines[line_number - 1:]
+    except (OSError, FileNotFoundError):
+        print("You're probably using flask_selfdoc with compiled python code "
+              "- prefer uncompiled source files to extract correct filenames "
+              "and line numbers.")
+        # not 100% correct solution, won't work for multiline decorator
+        # or if there are decorators between @autodoc.doc() and the endpoint
+        # function
+        context_lines = frame.code_context
+
+    # if the detected line number doesn't point to a function definition,
+    # we iterate until we find one.
+    for line in context_lines:
+        if not line.strip().startswith('def '):
+            line_number += 1
+        else:
+            break
+
+    return {
+        'filename': frame.filename,
+        'line': line_number,
+    }
 
 
 class Autodoc(object):
@@ -44,7 +145,10 @@ class Autodoc(object):
         self.add_custom_template_filters(app)
 
     def teardown(self, exception):
-        ctx = stack.top  # noqa: F841
+        if _cv_app is not None:
+            ctx = _cv_app.get(None)  # noqa: F841
+        else:
+            ctx = stack.top  # noqa: F841
 
     def add_custom_template_filters(self, app):
         """Add custom filters to jinja2 templating engine"""
@@ -57,7 +161,7 @@ class Autodoc(object):
         _paragraph_re = re.compile(r'(?:\r\n|\r|\n){3,}')
 
         @app.template_filter()
-        @evalcontextfilter
+        @pass_eval_context
         def nl2br(eval_ctx, value):
             result = '\n\n'.join('%s' % p.replace('\n', Markup('<br>\n'))
                                  for p in _paragraph_re.split(value))
@@ -104,10 +208,7 @@ class Autodoc(object):
             # Set location
             if set_location:
                 caller_frame = inspect.stack()[1]
-                self.func_locations[f] = {
-                        'filename': caller_frame[1],
-                        'line':     caller_frame[2],
-                        }
+                self.func_locations[f] = get_decorator_frame_info(caller_frame)
 
             return f
         return decorator
@@ -153,7 +254,7 @@ class Autodoc(object):
                     methods=sorted(list(rule.methods)),
                     rule="%s" % rule,
                     endpoint=rule.endpoint,
-                    docstring=func.__doc__,
+                    docstring=func.__doc__.strip(' ') if func.__doc__ else None,
                     args=arguments,
                     defaults=rule.defaults or dict(),
                     location=location,
@@ -201,7 +302,10 @@ class Autodoc(object):
                         raise RuntimeError(
                             "Autodoc was not initialized with the Flask app.")
 
-    def json(self, groups='all'):
+    def json(self,
+             groups='all',
+             indent: Optional[int] = None,
+             separators: Optional[Tuple] = (',', ':')):
         """Return a json object with documentation for all the routes specified
         by the doc() method.
 
@@ -224,7 +328,7 @@ class Autodoc(object):
             'endpoints':
                 [endpoint_info(doc) for doc in autodoc]
         }
-        return jsonify(data)
+        return custom_jsonify(data, indent=indent, separators=separators)
 
 
 def sort_lexically(links):
